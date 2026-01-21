@@ -1,0 +1,14 @@
+{
+  "id": "downtime-rep",
+  "title": "Downtime Reputation Builder",
+  "description": "A module to track players building reputation during downtime.",
+  "version": "#{VERSION}#",
+  "authors": [{ "name": "PinguTwo" }],
+  "compatibility": { "minimum": "13", "verified": "13" },
+  "socket": true,
+  "url": "#{URL}#",
+  "manifest": "#{MANIFEST}#",
+  "download": "#{DOWNLOAD}#",
+  "esmodules": ["scripts/downtime-rep.js"],
+  "styles": ["styles/downtime-rep.css"]
+}

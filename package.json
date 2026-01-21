@@ -1,0 +1,24 @@
+{
+  "name": "downtime-rep",
+  "version": "1.0.0",
+  "description": "A module to track players building reputation during downtime.",
+  "main": "index.js",
+  "scripts": {
+    "createSymlinks": "node ./tools/create-symlinks.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jwrpalmer99/downtime-rep.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jwrpalmer99/downtime-repissues"
+  },
+  "homepage": "https://github.com/jwrpalmer99/downtime-rep#readme",
+  "dependencies": {
+    "js-yaml": "^4.1.1"
+  }
+}
