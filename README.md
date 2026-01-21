@@ -1,6 +1,14 @@
 ## Downtime Reputation Tracker
 
-Foundry VTT v13 module for DnD5e 5.2.4 that tracks reputation-building during downtime.
+Foundry VTT v13 module for DnD5e 5.2.4 that tracks reputation-building during downtime. 
+Build relationship phases with multiple skill checks and narrative events.
+Track progress through your relationship phase and show activity log directly on character sheets.
+Extensive customization and management via module settings.
+
+<img width="1496" height="821" alt="default_and_tidy" src="https://github.com/user-attachments/assets/b05a552f-e9b6-4101-bdff-71c1b4089c25" />
+
+<img width="1469" height="796" alt="settings" src="https://github.com/user-attachments/assets/363795a5-147a-4f39-bb09-bc73604e71b2" />
+
 
 ### Features
 - Phase-based tracking with sequential unlocks and auto-advance on completion.
