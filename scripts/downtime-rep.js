@@ -6,10 +6,13 @@ const DEFAULT_TAB_LABEL = SHEET_TAB_LABEL;
 const DEFAULT_INTERVAL_LABEL = "Weekly";
 const DEBUG_SETTING = "debugLogging";
 const TIDY_TEMPLATE_PATH = "modules/downtime-rep/templates/downtime-rep.hbs";
+const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 let tidyApi = null;
 const SOCKET_EVENT_STATE = "state-updated";
 const SOCKET_EVENT_REQUEST = "state-request";
 const RESTRICTED_ACTORS_SETTING = "restrictedActorUuids";
+const SETTINGS_EXPORT_MENU = "settingsExport";
+const STATE_EXPORT_MENU = "stateExport";
 
 const DEFAULT_PHASE_CONFIG = [
   {
@@ -24,10 +27,13 @@ const DEFAULT_PHASE_CONFIG = [
     skillTargets: { insight: 3, persuasion: 3, religion: 2 },
     image: "",
     skillDcSteps: {
-      insight: [13, 13, 14],
-      persuasion: [14, 14, 15],
-      religion: [15, 16],
+      insight: [12, 13, 14],
+      persuasion: [13, 13, 14],
+      religion: [14, 15],
     },
+    dcPenaltySkill: "insight",
+    dcPenaltyPerMissing: 1,
+    failureEventTable: "",
     skillNarratives: {
       insight: {
         1: {
@@ -88,6 +94,9 @@ const DEFAULT_PHASE_CONFIG = [
     failureEvents: false,
     skills: ["persuasion", "religion", "insight"],
     skillDcs: { persuasion: 15, religion: 15, insight: 15 },
+    dcPenaltySkill: "insight",
+    dcPenaltyPerMissing: 0,
+    failureEventTable: "",
     image: "",
     progressNarrative: {
       1: {
@@ -135,6 +144,9 @@ const DEFAULT_PHASE_CONFIG = [
     failureEvents: true,
     skills: ["persuasion", "religion", "insight"],
     skillDcs: { persuasion: 15, religion: 15, insight: 15 },
+    dcPenaltySkill: "insight",
+    dcPenaltyPerMissing: 0,
+    failureEventTable: "",
     image: "",
     progressNarrative: {
       3: {
@@ -205,19 +217,36 @@ class DowntimeRepApp extends Application {
   }
 }
 
-class DowntimeRepSettings extends FormApplication {
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: "downtime-rep-settings",
+class DowntimeRepSettings extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-settings",
+    tag: "form",
+    classes: ["downtime-rep", "drep-settings"],
+    window: {
       title: "Downtime Reputation Settings",
-      template: "modules/downtime-rep/templates/downtime-rep-settings.hbs",
+      icon: "fas fa-fire",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
       width: 520,
       height: "auto",
-      classes: ["downtime-rep", "drep-settings"],
-    });
-  }
+    },
+    form: {
+      handler: DowntimeRepSettings._onSubmit,
+      closeOnSubmit: false,
+      submitOnChange: false,
+    },
+  };
 
-  getData() {
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-settings.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
     const state = getWorldState();
     const skillAliases = getSkillAliases();
     const headerLabel = getHeaderLabel();
@@ -260,6 +289,7 @@ class DowntimeRepSettings extends FormApplication {
     });
 
     return {
+      ...context,
       state,
       skillAliases,
       skillAliasJson: JSON.stringify(skillAliases, null, 2),
@@ -275,8 +305,26 @@ class DowntimeRepSettings extends FormApplication {
     };
   }
 
-  activateListeners(html) {
-    super.activateListeners(html);
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const html = $(this.element);
+    html.find(".file-picker").on("click", (event) => {
+      event.preventDefault();
+      const button = event.currentTarget;
+      const target = button?.dataset?.target;
+      const type = button?.dataset?.type ?? "image";
+      if (!target) return;
+      const input = html.find(`[name='${target}']`).first();
+      if (!input.length) return;
+      const picker = new FilePicker({
+        type,
+        current: input.val(),
+        callback: (path) => {
+          input.val(path);
+        },
+      });
+      picker.browse();
+    });
     html.find("[data-drep-drop='actor-uuids']").on("dragover", (event) => {
       event.preventDefault();
     });
@@ -295,6 +343,18 @@ class DowntimeRepSettings extends FormApplication {
       event.preventDefault();
       const action = event.currentTarget?.dataset?.drepAction;
       if (!action) return;
+      if (action === "open-skill-aliases") {
+        new DowntimeRepSkillAliases().render(true);
+        return;
+      }
+      if (action === "open-phase-config") {
+        new DowntimeRepPhaseConfig().render(true);
+        return;
+      }
+      if (action === "open-progress-state") {
+        new DowntimeRepProgressState().render(true);
+        return;
+      }
       if (action === "log-recalc") {
         this.#handleLogRecalc();
         return;
@@ -307,9 +367,16 @@ class DowntimeRepSettings extends FormApplication {
     });
   }
 
-  async _updateObject(event, formData) {
+  static async _onSubmit(event, form, formData) {
+    const data = foundry.utils.expandObject(formData.object ?? {});
+    await this._processFormData(data);
+  }
+
+  async _processFormData(formData) {
     const state = getWorldState();
-    state.criticalBonusEnabled = Boolean(formData.criticalBonusEnabled);
+    if (Object.prototype.hasOwnProperty.call(formData, "criticalBonusEnabled")) {
+      state.criticalBonusEnabled = Boolean(formData.criticalBonusEnabled);
+    }
 
     const requestedPhaseId = formData.activePhaseId;
     if (requestedPhaseId) {
@@ -339,9 +406,7 @@ class DowntimeRepSettings extends FormApplication {
     updatePhaseImagesFromForm(phaseConfig, formData);
     applyStateOverridesFromForm(state, formData, phaseConfig);
 
-    if (parsedConfig) {
-      await game.settings.set(MODULE_ID, "phaseConfig", parsedConfig);
-    }
+    await game.settings.set(MODULE_ID, "phaseConfig", phaseConfig);
 
     await setWorldState(state);
     await game.settings.set(MODULE_ID, "skillAliases", skillAliases);
@@ -476,6 +541,417 @@ class DowntimeRepSettings extends FormApplication {
   }
 }
 
+class DowntimeRepSkillAliases extends HandlebarsApplicationMixin(ApplicationV2) {
+  constructor(...args) {
+    super(...args);
+    const aliases = getSkillAliases();
+    this._rows = Object.entries(aliases).map(([key, value]) => ({
+      key,
+      value,
+    }));
+    if (!this._rows.length) {
+      this._rows.push({ key: "", value: "" });
+    }
+  }
+
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-skill-aliases",
+    tag: "form",
+    classes: ["downtime-rep", "drep-settings", "drep-dialog"],
+    window: {
+      title: "Skill Alias Mapping",
+      icon: "fas fa-link",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
+      width: 520,
+      height: "auto",
+    },
+    form: {
+      handler: DowntimeRepSkillAliases._onSubmit,
+      closeOnSubmit: true,
+      submitOnChange: false,
+    },
+  };
+
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-skill-aliases.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    return {
+      ...context,
+      aliasRows: this._rows,
+    };
+  }
+
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const html = $(this.element);
+    html.find("[data-drep-action='add-alias']").on("click", (event) => {
+      event.preventDefault();
+      this._rows.push({ key: "", value: "" });
+      this.render(true);
+    });
+    html.find("[data-drep-action='remove-alias']").on("click", (event) => {
+      event.preventDefault();
+      const index = Number(event.currentTarget?.dataset?.index);
+      if (!Number.isFinite(index)) return;
+      this._rows.splice(index, 1);
+      if (!this._rows.length) {
+        this._rows.push({ key: "", value: "" });
+      }
+      this.render(true);
+    });
+  }
+
+  static async _onSubmit(event, form, formData) {
+    const data = foundry.utils.expandObject(formData.object ?? {});
+    const rows = Object.values(data.aliases ?? {});
+    const mapped = {};
+    for (const row of rows) {
+      const key = String(row?.key ?? "").trim();
+      const value = String(row?.value ?? "").trim();
+      if (!key || !value) continue;
+      mapped[key] = value;
+    }
+    await game.settings.set(MODULE_ID, "skillAliases", mapped);
+    rerenderCharacterSheets();
+    rerenderSettingsApps();
+    ui.notifications.info("Downtime Reputation: skill aliases saved.");
+  }
+}
+
+class DowntimeRepPhaseConfig extends HandlebarsApplicationMixin(ApplicationV2) {
+  constructor(...args) {
+    super(...args);
+    this._phaseConfig = getPhaseConfig();
+  }
+
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-phase-config",
+    tag: "form",
+    classes: ["downtime-rep", "drep-settings", "drep-dialog"],
+    window: {
+      title: "Phase Configuration",
+      icon: "fas fa-sliders-h",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
+      width: 720,
+      height: "auto",
+    },
+    form: {
+      handler: DowntimeRepPhaseConfig._onSubmit,
+      closeOnSubmit: true,
+      submitOnChange: false,
+    },
+  };
+
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-phase-config.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    const skillAliases = getSkillAliases();
+    const phases = this._phaseConfig.map((phase, index) => {
+      const skills = getPhaseSkillList(phase);
+      const skillTargetRows = skills.map((key) => ({
+        key,
+        label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+        value: Number(phase.skillTargets?.[key] ?? 0),
+      }));
+      const skillDcStepRows = skills.map((key) => ({
+        key,
+        label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+        value: serializeNumberList(phase.skillDcSteps?.[key] ?? []),
+      }));
+      const skillNarrativeRows = skills.map((key) => ({
+        key,
+        label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+        value: serializeNarrativeLines(phase.skillNarratives?.[key] ?? {}),
+      }));
+      const skillDcRows = skills.map((key) => ({
+        key,
+        label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+        value: Number(phase.skillDcs?.[key] ?? 0),
+      }));
+
+      return {
+        ...phase,
+        number: index + 1,
+        isPhase1: phase.id === "phase1",
+        skillsText: skills.join(", "),
+        penaltySkillOptions: skills.map((key) => ({
+          key,
+          label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+          selected: key === phase.dcPenaltySkill,
+        })),
+        penaltyPerMissing: Number(phase.dcPenaltyPerMissing ?? 1),
+        failureEventTable: phase.failureEventTable ?? "",
+        failureLinesText: (phase.failureLines ?? []).join("\n"),
+        progressNarrativeText: serializeNarrativeLines(
+          phase.progressNarrative ?? {}
+        ),
+        skillTargetRows,
+        skillDcStepRows,
+        skillNarrativeRows,
+        skillDcRows,
+      };
+    });
+
+    return {
+      ...context,
+      phases,
+    };
+  }
+
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const html = $(this.element);
+    const initialTab = this._phaseConfig[0]?.id ?? "phase1";
+    html.find(".drep-tab-button").removeClass("active");
+    html.find(".drep-phase-tab").removeClass("active");
+    html.find(`.drep-tab-button[data-tab='${initialTab}']`).addClass("active");
+    html.find(`.drep-phase-tab[data-tab='${initialTab}']`).addClass("active");
+    html.find(".drep-tab-button").on("click", (event) => {
+      event.preventDefault();
+      const tab = event.currentTarget?.dataset?.tab;
+      if (!tab) return;
+      html.find(".drep-tab-button").removeClass("active");
+      html.find(".drep-phase-tab").removeClass("active");
+      html.find(`.drep-tab-button[data-tab='${tab}']`).addClass("active");
+      html.find(`.drep-phase-tab[data-tab='${tab}']`).addClass("active");
+    });
+    html.find(".drep-skill-list").on("change", (event) => {
+      const input = event.currentTarget;
+      const phaseId = input?.dataset?.phaseId;
+      if (!phaseId) return;
+      const phase1 = input?.dataset?.phase1 === "true";
+      refreshPhaseSkillSections(html, phaseId, phase1);
+    });
+    html.find("[data-drep-drop='rolltable']").on("dragover", (event) => {
+      event.preventDefault();
+    });
+    html.find("[data-drep-drop='rolltable']").on("drop", (event) => {
+      event.preventDefault();
+      const data = TextEditor.getDragEventData(event.originalEvent ?? event);
+      const uuid =
+        data?.uuid ?? (data?.type === "RollTable" ? `RollTable.${data.id}` : "");
+      if (!uuid) return;
+      const input = $(event.currentTarget);
+      input.val(uuid);
+    });
+  }
+
+  static async _onSubmit(event, form, formData) {
+    const data = foundry.utils.expandObject(formData.object ?? {});
+    const phaseConfig = getPhaseConfig();
+    const updated = applyPhaseConfigFormData(phaseConfig, data);
+    await game.settings.set(MODULE_ID, "phaseConfig", updated);
+    rerenderCharacterSheets();
+    rerenderSettingsApps();
+    ui.notifications.info("Downtime Reputation: phase configuration saved.");
+  }
+}
+
+class DowntimeRepProgressState extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-progress-state",
+    tag: "form",
+    classes: ["downtime-rep", "drep-settings", "drep-dialog"],
+    window: {
+      title: "Progress State",
+      icon: "fas fa-chart-line",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
+      width: 560,
+      height: "auto",
+    },
+    form: {
+      handler: DowntimeRepProgressState._onSubmit,
+      closeOnSubmit: true,
+      submitOnChange: false,
+    },
+  };
+
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-progress-state.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    const state = getWorldState();
+    const phaseConfig = getPhaseConfig();
+    const skillAliases = getSkillAliases();
+    const phase1Config =
+      phaseConfig.find((phase) => phase.id === "phase1") ?? phaseConfig[0];
+    const phase1SkillState = getPhaseSkillList(phase1Config).map((key) => ({
+      key,
+      label: getSkillLabel(resolveSkillKey(key, skillAliases)),
+      value: Number(state.phases.phase1?.skillProgress?.[key] ?? 0),
+      target: getPhaseSkillTarget(phase1Config, key),
+    }));
+    const phases = phaseConfig.map((phase, index) => {
+      const phaseState = state.phases[phase.id] ?? {};
+      return {
+        id: phase.id,
+        number: index + 1,
+        name: phase.name,
+        target: phase.target,
+        progress: Number(phaseState.progress ?? 0),
+        completed: Boolean(phaseState.completed),
+        failuresInRow: Number(phaseState.failuresInRow ?? 0),
+        isPhase1: phase.id === "phase1",
+        skillRows: phase.id === "phase1" ? phase1SkillState : [],
+      };
+    });
+
+    return {
+      ...context,
+      checkCount: Number(state.checkCount ?? 0),
+      phases,
+    };
+  }
+
+  static async _onSubmit(event, form, formData) {
+    const data = foundry.utils.expandObject(formData.object ?? {});
+    const state = getWorldState();
+    const phaseConfig = getPhaseConfig();
+    applyStateOverridesFromForm(state, data, phaseConfig);
+    await setWorldState(state);
+    rerenderCharacterSheets();
+    rerenderSettingsApps();
+    ui.notifications.info("Downtime Reputation: progress state saved.");
+  }
+}
+
+class DowntimeRepSettingsExport extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-settings-export",
+    classes: ["downtime-rep", "drep-settings", "drep-dialog"],
+    window: {
+      title: "Downtime Reputation: Export/Import Settings",
+      icon: "fas fa-file-export",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
+      width: 640,
+      height: "auto",
+    },
+  };
+
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-settings-export.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    return {
+      ...context,
+      jsonText: "",
+    };
+  }
+
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const html = $(this.element);
+    const textarea = html.find("[data-drep-io='json']");
+    html.find("[data-drep-action='export']").on("click", (event) => {
+      event.preventDefault();
+      textarea.val(JSON.stringify(getSettingsExportPayload(), null, 2));
+    });
+    html.find("[data-drep-action='download']").on("click", (event) => {
+      event.preventDefault();
+      const data = textarea.val() || JSON.stringify(getSettingsExportPayload(), null, 2);
+      saveJsonToFile(data, "downtime-rep-settings.json");
+    });
+    html.find("[data-drep-action='import']").on("click", async (event) => {
+      event.preventDefault();
+      const raw = textarea.val();
+      if (!raw) return;
+      const parsed = parseJsonPayload(raw);
+      if (!parsed) return;
+      await applySettingsImportPayload(parsed);
+      rerenderCharacterSheets();
+      rerenderSettingsApps();
+      ui.notifications.info("Downtime Reputation: settings imported.");
+    });
+  }
+}
+
+class DowntimeRepStateExport extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "downtime-rep-state-export",
+    classes: ["downtime-rep", "drep-settings", "drep-dialog"],
+    window: {
+      title: "Downtime Reputation: Export/Import State",
+      icon: "fas fa-file-export",
+      contentClasses: ["standard-form"],
+      resizable: true,
+    },
+    position: {
+      width: 640,
+      height: "auto",
+    },
+  };
+
+  static PARTS = {
+    form: {
+      template: "modules/downtime-rep/templates/downtime-rep-state-export.hbs",
+    },
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    return {
+      ...context,
+      jsonText: "",
+    };
+  }
+
+  _onRender(context, options) {
+    super._onRender(context, options);
+    const html = $(this.element);
+    const textarea = html.find("[data-drep-io='json']");
+    html.find("[data-drep-action='export']").on("click", (event) => {
+      event.preventDefault();
+      textarea.val(JSON.stringify(getStateExportPayload(), null, 2));
+    });
+    html.find("[data-drep-action='download']").on("click", (event) => {
+      event.preventDefault();
+      const data = textarea.val() || JSON.stringify(getStateExportPayload(), null, 2);
+      saveJsonToFile(data, "downtime-rep-state.json");
+    });
+    html.find("[data-drep-action='import']").on("click", async (event) => {
+      event.preventDefault();
+      const raw = textarea.val();
+      if (!raw) return;
+      const parsed = parseJsonPayload(raw);
+      if (!parsed) return;
+      await applyStateImportPayload(parsed);
+      rerenderCharacterSheets();
+      rerenderSettingsApps();
+      ui.notifications.info("Downtime Reputation: state imported.");
+    });
+  }
+}
+
 function debugLog(message, data = {}) {
   try {
     if (!game?.settings?.get(MODULE_ID, DEBUG_SETTING)) return;
@@ -510,6 +986,20 @@ function normalizePhaseConfig(config) {
       Array.isArray(merged.skills) && merged.skills.length
         ? merged.skills
         : fallback.skills ?? getDefaultSkills();
+    const perMissing = Number(merged.dcPenaltyPerMissing);
+    merged.dcPenaltyPerMissing = Number.isFinite(perMissing)
+      ? Math.max(0, perMissing)
+      : Number(fallback.dcPenaltyPerMissing ?? 0);
+    merged.dcPenaltySkill =
+      typeof merged.dcPenaltySkill === "string"
+        ? merged.dcPenaltySkill
+        : fallback.dcPenaltySkill ?? "insight";
+    if (!merged.skills.includes(merged.dcPenaltySkill)) {
+      merged.dcPenaltySkill = merged.skills.includes("insight")
+        ? "insight"
+        : merged.skills[0] ?? "";
+    }
+
     if (merged.id === "phase1") {
       merged.skillTargets = normalizeSkillTargets(merged, fallback);
       if (!Number.isFinite(merged.target) || merged.target <= 0) {
@@ -520,6 +1010,10 @@ function normalizePhaseConfig(config) {
     } else {
       merged.skillDcs = merged.skillDcs ?? fallback.skillDcs;
     }
+    merged.failureEventTable =
+      typeof merged.failureEventTable === "string"
+        ? merged.failureEventTable
+        : fallback.failureEventTable ?? "";
     output.push(merged);
   }
 
@@ -565,6 +1059,393 @@ function parseSkillAliases(raw) {
       "Downtime Reputation: skill aliases JSON is invalid."
     );
     return null;
+  }
+}
+
+function parseList(raw) {
+  if (!raw) return [];
+  return String(raw)
+    .split(/[,;\n]/)
+    .map((value) => value.trim())
+    .filter((value) => value.length);
+}
+
+function parseNumberList(raw) {
+  if (!raw) return [];
+  return parseList(raw)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function parseNarrativeLines(raw) {
+  const output = {};
+  if (!raw) return output;
+  const lines = String(raw)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length);
+  for (const line of lines) {
+    const [rawKey, rawTitle, ...rawText] = line.split("|");
+    const key = Number(rawKey);
+    if (!Number.isFinite(key)) continue;
+    const title = (rawTitle ?? "").trim();
+    const text = rawText.join("|").trim();
+    if (!title && !text) continue;
+    output[key] = { title, text };
+  }
+  return output;
+}
+
+function refreshPhaseSkillSections(html, phaseId, isPhase1) {
+  const skillAliases = getSkillAliases();
+  const skillText = html
+    .find(`.drep-skill-list[data-phase-id='${phaseId}']`)
+    .val();
+  const skills = parseList(skillText);
+  if (!skills.length) return;
+
+  const penaltySelect = html.find(
+    `.drep-penalty-skill[data-phase-id='${phaseId}']`
+  );
+  if (penaltySelect.length) {
+    const current = penaltySelect.val();
+    penaltySelect.empty();
+    for (const key of skills) {
+      const label = getSkillLabel(resolveSkillKey(key, skillAliases));
+      penaltySelect.append(`<option value="${key}">${label}</option>`);
+    }
+    if (skills.includes(current)) {
+      penaltySelect.val(current);
+    }
+  }
+
+  if (isPhase1) {
+    const targetContainer = html.find(
+      `.drep-skill-targets[data-phase-id='${phaseId}'] .drep-state-grid`
+    );
+    const stepContainer = html.find(
+      `.drep-skill-steps[data-phase-id='${phaseId}'] .drep-state-grid`
+    );
+    const narrativeContainer = html.find(
+      `.drep-skill-narratives[data-phase-id='${phaseId}']`
+    );
+
+    const targetValues = extractPhaseSkillValues(
+      html,
+      phaseId,
+      "skillTargets"
+    );
+    const stepValues = extractPhaseSkillValues(
+      html,
+      phaseId,
+      "skillDcSteps"
+    );
+    const narrativeValues = extractPhaseSkillValues(
+      html,
+      phaseId,
+      "skillNarratives"
+    );
+
+    if (targetContainer.length) {
+      targetContainer.empty();
+      for (const key of skills) {
+        const label = getSkillLabel(resolveSkillKey(key, skillAliases));
+        const value = targetValues[key] ?? "";
+        targetContainer.append(`
+          <label>
+            ${label}
+            <input type="number" name="phases.${phaseId}.skillTargets.${key}" value="${value}" min="0" />
+          </label>
+        `);
+      }
+    }
+
+    if (stepContainer.length) {
+      stepContainer.empty();
+      for (const key of skills) {
+        const label = getSkillLabel(resolveSkillKey(key, skillAliases));
+        const value = stepValues[key] ?? "";
+        stepContainer.append(`
+          <label>
+            ${label}
+            <input type="text" name="phases.${phaseId}.skillDcSteps.${key}" value="${value}" placeholder="13, 14, 15" />
+          </label>
+        `);
+      }
+    }
+
+    if (narrativeContainer.length) {
+      const summary = narrativeContainer.find("summary");
+      narrativeContainer.children(".form-group").remove();
+      for (const key of skills) {
+        const label = getSkillLabel(resolveSkillKey(key, skillAliases));
+        const value = narrativeValues[key] ?? "";
+        const block = $(`
+          <div class="form-group">
+            <label>${label}</label>
+            <textarea name="phases.${phaseId}.skillNarratives.${key}" rows="4"></textarea>
+            <p class="notes">One line per step: <code>step|Title|Text</code></p>
+          </div>
+        `);
+        block.find("textarea").val(value);
+        summary.after(block);
+      }
+    }
+  } else {
+    const dcContainer = html.find(
+      `.drep-skill-dcs[data-phase-id='${phaseId}'] .drep-state-grid`
+    );
+    const dcValues = extractPhaseSkillValues(html, phaseId, "skillDcs");
+    if (dcContainer.length) {
+      dcContainer.empty();
+      for (const key of skills) {
+        const label = getSkillLabel(resolveSkillKey(key, skillAliases));
+        const value = dcValues[key] ?? "";
+        dcContainer.append(`
+          <label>
+            ${label}
+            <input type="number" name="phases.${phaseId}.skillDcs.${key}" value="${value}" min="0" />
+          </label>
+        `);
+      }
+    }
+  }
+}
+
+function extractPhaseSkillValues(html, phaseId, field) {
+  const values = {};
+  html
+    .find(`[name^="phases.${phaseId}.${field}."]`)
+    .each((_, input) => {
+      const name = input.name;
+      const key = name.split(".").pop();
+      values[key] = $(input).val();
+    });
+  return values;
+}
+
+function serializeNumberList(values) {
+  if (!Array.isArray(values)) return "";
+  return values.filter((value) => Number.isFinite(value)).join(", ");
+}
+
+function serializeNarrativeLines(narratives) {
+  if (!narratives) return "";
+  const entries = Object.entries(narratives)
+    .map(([key, value]) => ({
+      key: Number(key),
+      title: value?.title ?? "",
+      text: value?.text ?? "",
+    }))
+    .filter((entry) => Number.isFinite(entry.key))
+    .sort((a, b) => a.key - b.key);
+  return entries
+    .map((entry) => `${entry.key}|${entry.title}|${entry.text}`)
+    .join("\n");
+}
+
+function applyPhaseConfigFormData(phaseConfig, formData) {
+  const phasesData = formData?.phases ?? {};
+  const updated = phaseConfig.map((phase) => {
+    const data = phasesData?.[phase.id] ?? {};
+    const next = foundry.utils.deepClone(phase);
+    if (typeof data.name === "string" && data.name.trim()) {
+      next.name = data.name.trim();
+    }
+    if (typeof data.narrativeDuration === "string") {
+      next.narrativeDuration = data.narrativeDuration.trim();
+    }
+    if (typeof data.expectedGain === "string") {
+      next.expectedGain = data.expectedGain.trim();
+    }
+    if (Number.isFinite(Number(data.target))) {
+      next.target = Math.max(0, Number(data.target));
+    }
+    next.allowCriticalBonus = Boolean(data.allowCriticalBonus);
+    next.failureEvents = Boolean(data.failureEvents);
+
+    if (typeof data.skills === "string" && data.skills.trim()) {
+      next.skills = parseList(data.skills);
+    }
+
+    if (next.id === "phase1") {
+      const skillTargets = {};
+      const skillDcSteps = {};
+      const skillNarratives = {};
+      for (const key of getPhaseSkillList(next)) {
+        const targetValue = data.skillTargets?.[key];
+        if (Number.isFinite(Number(targetValue))) {
+          skillTargets[key] = Math.max(0, Number(targetValue));
+        } else if (Number.isFinite(next.skillTargets?.[key])) {
+          skillTargets[key] = Number(next.skillTargets?.[key]);
+        }
+
+        const stepRaw = data.skillDcSteps?.[key];
+        if (typeof stepRaw === "string") {
+          const steps = parseNumberList(stepRaw);
+          if (steps.length) {
+            skillDcSteps[key] = steps;
+          }
+        }
+        if (!skillDcSteps[key] && Array.isArray(next.skillDcSteps?.[key])) {
+          skillDcSteps[key] = next.skillDcSteps[key];
+        }
+
+        const narrativeRaw = data.skillNarratives?.[key];
+        if (typeof narrativeRaw === "string") {
+          const parsed = parseNarrativeLines(narrativeRaw);
+          if (Object.keys(parsed).length) {
+            skillNarratives[key] = parsed;
+          }
+        }
+        if (!skillNarratives[key] && next.skillNarratives?.[key]) {
+          skillNarratives[key] = next.skillNarratives[key];
+        }
+      }
+      next.skillTargets = skillTargets;
+      next.skillDcSteps = skillDcSteps;
+      next.skillNarratives = skillNarratives;
+    } else {
+      const skillDcs = {};
+      for (const key of getPhaseSkillList(next)) {
+        const dcValue = data.skillDcs?.[key];
+        if (Number.isFinite(Number(dcValue))) {
+          skillDcs[key] = Math.max(0, Number(dcValue));
+        } else if (Number.isFinite(next.skillDcs?.[key])) {
+          skillDcs[key] = Number(next.skillDcs?.[key]);
+        }
+      }
+      next.skillDcs = skillDcs;
+      if (typeof data.progressNarrative === "string") {
+        const parsed = parseNarrativeLines(data.progressNarrative);
+        if (Object.keys(parsed).length) {
+          next.progressNarrative = parsed;
+        }
+      }
+    }
+
+    const penaltySkill =
+      typeof data.dcPenaltySkill === "string"
+        ? data.dcPenaltySkill.trim()
+        : "";
+    next.dcPenaltySkill = next.skills.includes(penaltySkill)
+      ? penaltySkill
+      : next.skills.includes("insight")
+        ? "insight"
+        : next.skills[0] ?? "";
+    const penaltyValue = Number(data.dcPenaltyPerMissing);
+    next.dcPenaltyPerMissing = Number.isFinite(penaltyValue)
+      ? Math.max(0, penaltyValue)
+      : Number(next.dcPenaltyPerMissing ?? 0);
+
+    if (typeof data.failureLines === "string") {
+      const lines = data.failureLines
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length);
+      if (lines.length) {
+        next.failureLines = lines;
+      }
+    }
+
+    if (typeof data.failureEventTable === "string") {
+      next.failureEventTable = data.failureEventTable.trim();
+    }
+
+    return next;
+  });
+
+  return normalizePhaseConfig(updated);
+}
+
+function getSettingsExportPayload() {
+  return {
+    module: MODULE_ID,
+    version: game.modules.get(MODULE_ID)?.version ?? "",
+    exportedAt: new Date().toISOString(),
+    settings: {
+      headerLabel: getHeaderLabel(),
+      tabLabel: getTabLabel(),
+      intervalLabel: getIntervalLabel(),
+      skillAliases: getSkillAliases(),
+      phaseConfig: getPhaseConfig(),
+      restrictedActorUuids: getRestrictedActorUuids(),
+    },
+  };
+}
+
+function getStateExportPayload() {
+  return {
+    module: MODULE_ID,
+    version: game.modules.get(MODULE_ID)?.version ?? "",
+    exportedAt: new Date().toISOString(),
+    state: getWorldState(),
+  };
+}
+
+function parseJsonPayload(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+    ui.notifications.error("Downtime Reputation: invalid JSON.");
+    return null;
+  }
+}
+
+async function applySettingsImportPayload(payload) {
+  const settings = payload?.settings ?? payload;
+  if (!settings || typeof settings !== "object") return;
+  if (typeof settings.headerLabel === "string") {
+    await game.settings.set(
+      MODULE_ID,
+      "headerLabel",
+      sanitizeLabel(settings.headerLabel, DEFAULT_HEADER_LABEL)
+    );
+  }
+  if (typeof settings.tabLabel === "string") {
+    await game.settings.set(
+      MODULE_ID,
+      "tabLabel",
+      sanitizeLabel(settings.tabLabel, DEFAULT_TAB_LABEL)
+    );
+  }
+  if (typeof settings.intervalLabel === "string") {
+    await game.settings.set(
+      MODULE_ID,
+      "intervalLabel",
+      sanitizeLabel(settings.intervalLabel, DEFAULT_INTERVAL_LABEL)
+    );
+  }
+  if (settings.skillAliases && typeof settings.skillAliases === "object") {
+    await game.settings.set(MODULE_ID, "skillAliases", settings.skillAliases);
+  }
+  if (Array.isArray(settings.phaseConfig)) {
+    await game.settings.set(MODULE_ID, "phaseConfig", settings.phaseConfig);
+  }
+  if (Array.isArray(settings.restrictedActorUuids)) {
+    await game.settings.set(
+      MODULE_ID,
+      RESTRICTED_ACTORS_SETTING,
+      settings.restrictedActorUuids
+    );
+  }
+  refreshSheetTabLabel();
+}
+
+async function applyStateImportPayload(payload) {
+  const state = payload?.state ?? payload;
+  if (!state || typeof state !== "object") return;
+  await setWorldState(state);
+}
+
+function saveJsonToFile(data, filename) {
+  try {
+    const blob = new Blob([data], { type: "application/json" });
+    saveDataToFile(blob, "application/json", filename);
+  } catch (error) {
+    console.error(error);
+    ui.notifications.warn("Downtime Reputation: failed to save file.");
   }
 }
 
@@ -693,13 +1574,19 @@ function buildTrackerData({
     return acc;
   }, {});
   const forcedSkillChoice = getForcedSkillChoice(activePhase);
-  const selectedSkillKey = forcedSkillChoice || skillChoices[0]?.key || "";
+  const lastSkillChoice = game.settings.get(MODULE_ID, "lastSkillChoice");
+  const preferredSkillChoice = skillChoices.some(
+    (choice) => choice.key === lastSkillChoice
+  )
+    ? lastSkillChoice
+    : skillChoices[0]?.key || "";
+  const selectedSkillKey = forcedSkillChoice || preferredSkillChoice;
   const selectedSkillTitle = getNextSkillTitle(
     activePhase,
     selectedSkillKey,
     skillLabels
   );
-  const phase1Penalty = getPhase1PenaltyInfo(activePhase, skillLabels);
+  const phase1Penalty = getPhasePenaltyInfo(activePhase, skillLabels);
 
   const progressPercent =
     activePhase.target > 0
@@ -726,6 +1613,7 @@ function buildTrackerData({
     skillChoices,
     actors,
     lastActorId,
+    lastSkillChoice: preferredSkillChoice,
     progressPercent,
     forcedSkillChoice,
     forcedSkillLabel,
@@ -761,6 +1649,9 @@ function attachTrackerListeners(html, { render, actor } = {}) {
 
   scope.find("[data-drep-name='skillChoice']").on("change", (event) => {
     const selected = $(event.currentTarget).val();
+    if (selected) {
+      game.settings.set(MODULE_ID, "lastSkillChoice", selected);
+    }
     const title = scope.find(`[data-drep-skill-title='${selected}']`).data("title") || "";
     if (!title) return;
     scope.find(".drep-skill-title").text(`Current Focus: ${title}`);
@@ -781,6 +1672,9 @@ async function handleRoll(root, { render, actorOverride } = {}) {
   await game.settings.set(MODULE_ID, "lastActorId", actor.id);
 
   const skillChoice = root.find("[data-drep-name='skillChoice']").val();
+  if (skillChoice) {
+    await game.settings.set(MODULE_ID, "lastSkillChoice", skillChoice);
+  }
 
   await runIntervalRoll({
     actor,
@@ -857,7 +1751,6 @@ async function runIntervalRoll({ actor, skillChoice }) {
         let nextValue = Math.min(currentValue + 1, maxValue);
         if (
           activePhase.allowCriticalBonus &&
-          state.criticalBonusEnabled &&
           isCriticalSuccess(roll)
         ) {
           const boosted = Math.min(nextValue + 1, maxValue);
@@ -887,7 +1780,6 @@ async function runIntervalRoll({ actor, skillChoice }) {
       progressGained = 1;
       if (
         activePhase.allowCriticalBonus &&
-        state.criticalBonusEnabled &&
         isCriticalSuccess(roll)
       ) {
         progressGained += 1;
@@ -909,6 +1801,10 @@ async function runIntervalRoll({ actor, skillChoice }) {
     ? null
     : pickFailureLine(activePhase.failureLines);
   const failureEvent = Boolean(!success && activePhase.failureEvents);
+  let failureEventResult = "";
+  if (!success && failureEvent) {
+    failureEventResult = await rollFailureEventTable(activePhase, actor);
+  }
 
   state.phases[activePhase.id] = {
     progress: activePhase.progress,
@@ -942,6 +1838,7 @@ async function runIntervalRoll({ actor, skillChoice }) {
     skillProgress: activePhase.skillProgress ?? undefined,
     failureLine: failureLine ?? "",
     failureEvent,
+    failureEventResult,
     timestamp: Date.now(),
   });
   state.log = state.log.slice(0, 50);
@@ -961,6 +1858,7 @@ async function runIntervalRoll({ actor, skillChoice }) {
     contextNote,
     failureLine,
     failureEvent,
+    failureEventResult,
     forcedSkillChoice,
     forcedSkillLabel: forcedSkillChoice
       ? getSkillLabel(resolveSkillKey(forcedSkillChoice, skillAliases))
@@ -985,6 +1883,7 @@ async function postSummaryMessage({
   contextNote,
   failureLine,
   failureEvent,
+  failureEventResult,
   forcedSkillChoice,
   forcedSkillLabel,
   phase1SkillProgress,
@@ -1022,6 +1921,9 @@ async function postSummaryMessage({
         failureEvent ? "Event" : "Strain"
       }:</strong> ${failureLine}</div>`
     : "";
+  const failureEventBlock = failureEventResult
+    ? `<div class="narrative"><strong>Event Table:</strong> ${failureEventResult}</div>`
+    : "";
 
   const content = `
       <div class="drep-chat">
@@ -1036,6 +1938,7 @@ async function postSummaryMessage({
         ${narrativeBlock}
         ${contextBlock}
         ${failureBlock}
+        ${failureEventBlock}
       </div>`;
   await ChatMessage.create({
     speaker: ChatMessage.getSpeaker({ actor }),
@@ -1044,36 +1947,76 @@ async function postSummaryMessage({
 }
 
 async function handleCompletion(state, activePhase, actor) {
-  if (activePhase.id !== "phase3") {
-    await setWorldState(state);
-    await ChatMessage.create({
-      speaker: ChatMessage.getSpeaker({ actor }),
-      content:
-        "<div class=\"drep-chat\"><h3>Phase Complete</h3><p>Next phase is now available.</p></div>",
-    });
-    return;
+  const nextPhaseId = getNextIncompletePhaseId(state);
+  const nextPhase = nextPhaseId ? getPhaseDefinition(nextPhaseId) : null;
+  const nextPhaseName = nextPhase?.name ?? "";
+
+  state.log.unshift({
+    type: "phase-complete",
+    phaseId: activePhase.id,
+    phaseName: activePhase.name,
+    nextPhaseId: nextPhaseId || "",
+    nextPhaseName,
+    timestamp: Date.now(),
+  });
+  state.log = state.log.slice(0, 50);
+
+  if (nextPhase && nextPhaseId !== activePhase.id) {
+    state.activePhaseId = nextPhaseId;
+    initializePhaseState(state, nextPhase);
   }
 
-  const existing = state.journalId && game.journal.get(state.journalId);
-  if (!existing) {
-    const entry = await JournalEntry.create({
-      name: "The Shared Ember",
-      content: `
-          <h2>The Shared Ember</h2>
-          <p>The Shared Ember exists. Ash-Twenty-Seven emerges, and the Cogs now have a safe place.</p>
-        `,
-      folder: null,
-    });
-    state.journalId = entry?.id ?? "";
+  if (activePhase.id === "phase3") {
+    const existing = state.journalId && game.journal.get(state.journalId);
+    if (!existing) {
+      const entry = await JournalEntry.create({
+        name: "The Shared Ember",
+        content: `
+            <h2>The Shared Ember</h2>
+            <p>The Shared Ember exists. Ash-Twenty-Seven emerges, and the Cogs now have a safe place.</p>
+          `,
+        folder: null,
+      });
+      state.journalId = entry?.id ?? "";
+    }
   }
 
   await setWorldState(state);
 
+  const completionNote = nextPhaseName
+    ? `Next phase activated: ${nextPhaseName}.`
+    : "All phases completed.";
   await ChatMessage.create({
     speaker: ChatMessage.getSpeaker({ actor }),
-    content:
-      "<div class=\"drep-chat\"><h3>Phase Complete</h3><p>Journal entry created: The Shared Ember.</p></div>",
+    content: `<div class="drep-chat"><h3>Phase Complete</h3><p>${completionNote}</p></div>`,
   });
+}
+
+async function rollFailureEventTable(phase, actor) {
+  const uuid = typeof phase?.failureEventTable === "string"
+    ? phase.failureEventTable.trim()
+    : "";
+  if (!uuid) return "";
+  let table = null;
+  try {
+    table = await fromUuid(uuid);
+  } catch (error) {
+    console.error(error);
+  }
+  if (!table || table.documentName !== "RollTable") {
+    debugLog("Failure event table not found", { uuid });
+    return "";
+  }
+  try {
+    const draw = await table.draw({ displayChat: true });
+    const results = draw?.results ?? [];
+    const label = results.map((result) => result.text).filter(Boolean).join(", ");
+    return label || table.name || "";
+  } catch (error) {
+    console.error(error);
+    ui.notifications.warn("Downtime Reputation: failed to roll event table.");
+    return "";
+  }
 }
 
 function getWorldState() {
@@ -1166,6 +2109,23 @@ function getActivePhase(state) {
 
 function getPhaseDefinition(phaseId) {
   return getPhaseConfig().find((phase) => phase.id === phaseId);
+}
+
+function initializePhaseState(state, phase) {
+  if (!state?.phases || !phase) return;
+  const phaseState = {
+    progress: 0,
+    completed: false,
+    failuresInRow: 0,
+  };
+  if (phase.id === "phase1") {
+    phaseState.skillProgress = buildEmptySkillProgress(phase);
+    phaseState.progress = getPhase1TotalProgress({
+      ...phase,
+      skillProgress: phaseState.skillProgress,
+    });
+  }
+  state.phases[phase.id] = phaseState;
 }
 
 function getPhaseNumber(phaseId) {
@@ -1284,12 +2244,12 @@ function getPhaseDc(phase, skillChoice) {
     if (Array.isArray(steps) && steps.length) {
       base = Number(steps[stepIndex] ?? steps[steps.length - 1] ?? 13);
     }
-    const penalty = getPhase1OtherSkillPenalty(phase, skillChoice);
+    const penalty = getPhaseOtherSkillPenalty(phase, skillChoice);
     return base + penalty;
   }
   const dc = phase.skillDcs?.[skillChoice];
-  if (Number.isFinite(dc)) return dc;
-  return 15;
+  const base = Number.isFinite(dc) ? dc : 15;
+  return base + getPhaseOtherSkillPenalty(phase, skillChoice);
 }
 
 function getPhase1Narrative(phase, skillChoice, skillProgress) {
@@ -1302,28 +2262,37 @@ function getPhase1ContextNote() {
   return "";
 }
 
-function getPhase1PenaltySkillKey(phase) {
+function getPenaltySkillKey(phase) {
   const skills = getPhaseSkillList(phase);
+  if (phase?.dcPenaltySkill && skills.includes(phase.dcPenaltySkill)) {
+    return phase.dcPenaltySkill;
+  }
   if (skills.includes("insight")) return "insight";
   return skills[0] ?? "";
 }
 
-function getPhase1OtherSkillPenalty(phase, skillChoice) {
-  if (!phase || phase.id !== "phase1") return 0;
-  const penaltySkill = getPhase1PenaltySkillKey(phase);
+function getPhaseOtherSkillPenalty(phase, skillChoice) {
+  if (!phase) return 0;
+  const penaltySkill = getPenaltySkillKey(phase);
   if (!penaltySkill || skillChoice === penaltySkill) return 0;
-  const progress = getPhase1SkillProgress(phase);
-  const target = getPhaseSkillTarget(phase, penaltySkill);
+  const perMissing = Number(phase.dcPenaltyPerMissing ?? 0);
+  if (!Number.isFinite(perMissing) || perMissing <= 0) return 0;
+  const progress =
+    phase.id === "phase1" ? getPhase1SkillProgress(phase) : {};
+  const target =
+    phase.id === "phase1"
+      ? getPhaseSkillTarget(phase, penaltySkill)
+      : 0;
   const current = Number(progress[penaltySkill] ?? 0);
-  return Math.max(0, target - current);
+  return Math.max(0, target - current) * perMissing;
 }
 
-function getPhase1PenaltyInfo(phase, skillLabels) {
-  if (!phase || phase.id !== "phase1") return "";
-  const penaltySkill = getPhase1PenaltySkillKey(phase);
+function getPhasePenaltyInfo(phase, skillLabels) {
+  if (!phase) return "";
+  const penaltySkill = getPenaltySkillKey(phase);
   if (!penaltySkill) return "";
   const label = skillLabels?.[penaltySkill] ?? penaltySkill;
-  const penalty = getPhase1OtherSkillPenalty(phase, "");
+  const penalty = getPhaseOtherSkillPenalty(phase, "");
   if (!penalty) return "";
   return `+${penalty} DC to other checks until ${label} reaches its target.`;
 }
@@ -1393,6 +2362,9 @@ function recalculateStateFromLog(state) {
 }
 
 function applyLogEntryToState(entry, state, phaseConfig, skillAliases) {
+  if (entry?.type === "phase-complete") {
+    return entry;
+  }
   const phase =
     phaseConfig.find((candidate) => candidate.id === entry.phaseId) ??
     phaseConfig[0];
@@ -2074,6 +3046,13 @@ Hooks.once("init", () => {
     default: "",
   });
 
+  game.settings.register(MODULE_ID, "lastSkillChoice", {
+    scope: "client",
+    config: false,
+    type: String,
+    default: "",
+  });
+
   game.settings.register(MODULE_ID, DEBUG_SETTING, {
     name: "Downtime Reputation: Debug Logging",
     hint: "Enable verbose console logging for the downtime tracker.",
@@ -2090,6 +3069,24 @@ Hooks.once("init", () => {
     hint: "Configure downtime phases, window, and skill mapping.",
     icon: "fas fa-fire",
     type: DowntimeRepSettings,
+    restricted: true,
+  });
+
+  game.settings.registerMenu(MODULE_ID, SETTINGS_EXPORT_MENU, {
+    name: "Export/Import Settings",
+    label: "Export/Import Settings",
+    hint: "Export or import downtime reputation settings as JSON.",
+    icon: "fas fa-file-export",
+    type: DowntimeRepSettingsExport,
+    restricted: true,
+  });
+
+  game.settings.registerMenu(MODULE_ID, STATE_EXPORT_MENU, {
+    name: "Export/Import State",
+    label: "Export/Import State",
+    hint: "Export or import downtime reputation state as JSON.",
+    icon: "fas fa-file-export",
+    type: DowntimeRepStateExport,
     restricted: true,
   });
 

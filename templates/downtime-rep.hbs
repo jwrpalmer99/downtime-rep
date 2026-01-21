@@ -67,7 +67,7 @@
           <label>
             <select data-drep-name="skillChoice" {{#if forcedSkillChoice}}disabled data-drep-disabled="true"{{/if}} class="always-interactive">
               {{#each skillChoices}}
-                <option value="{{this.key}}" {{#if (eq ../forcedSkillChoice this.key)}}selected{{/if}}>{{this.label}} (DC {{this.dc}})</option>
+                <option value="{{this.key}}" {{#if (eq ../forcedSkillChoice this.key)}}selected{{else if (eq ../lastSkillChoice this.key)}}selected{{/if}}>{{this.label}} (DC {{this.dc}})</option>
               {{/each}}
             </select>
             {{#each skillTitles}}
@@ -96,24 +96,36 @@
       <div class="drep-log">
         {{#each state.log}}
           <div class="drep-log-item {{#if this.success}}success{{else}}failure{{/if}}">
-            <div class="drep-log-main">
-              <strong>Check {{#if this.checkNumber}}{{this.checkNumber}}{{else}}{{this.windowDay}}{{/if}}:</strong>
-              {{this.actorName}} rolled {{this.skillLabel}} vs DC {{this.dc}}.
-              Result: {{this.total}} ({{#if this.success}}Success{{else}}Failure{{/if}})
-              {{#if this.progressGained}}
-                | Progress +{{this.progressGained}}{{#if this.criticalBonusApplied}} (critical){{/if}}
-              {{/if}}
-            </div>
-            {{#if this.narrativeTitle}}
-              <div class="drep-log-note"><strong>{{this.narrativeTitle}}:</strong> {{this.narrativeText}}</div>
-            {{/if}}
-            {{#if this.contextNote}}
-              <div class="drep-log-note"><strong>Note:</strong> {{this.contextNote}}</div>
-            {{/if}}
-            {{#if this.failureLine}}
-              <div class="drep-log-note">
-                <strong>{{#if this.failureEvent}}Event{{else}}Strain{{/if}}:</strong> {{this.failureLine}}
+            {{#if (eq this.type "phase-complete")}}
+              <div class="drep-log-main">
+                <strong>Phase Complete:</strong> {{this.phaseName}}
+                {{#if this.nextPhaseName}} → {{this.nextPhaseName}} active{{/if}}
               </div>
+            {{else}}
+              <div class="drep-log-main">
+                <strong>Check {{#if this.checkNumber}}{{this.checkNumber}}{{else}}{{this.windowDay}}{{/if}}:</strong>
+                {{this.actorName}} rolled {{this.skillLabel}} vs DC {{this.dc}}.
+                Result: {{this.total}} ({{#if this.success}}Success{{else}}Failure{{/if}})
+                {{#if this.progressGained}}
+                  | Progress +{{this.progressGained}}{{#if this.criticalBonusApplied}} (critical){{/if}}
+                {{/if}}
+              </div>
+              {{#if this.narrativeTitle}}
+                <div class="drep-log-note"><strong>{{this.narrativeTitle}}:</strong> {{this.narrativeText}}</div>
+              {{/if}}
+              {{#if this.contextNote}}
+                <div class="drep-log-note"><strong>Note:</strong> {{this.contextNote}}</div>
+              {{/if}}
+              {{#if this.failureLine}}
+                <div class="drep-log-note">
+                  <strong>{{#if this.failureEvent}}Event{{else}}Strain{{/if}}:</strong> {{this.failureLine}}
+                </div>
+              {{/if}}
+              {{#if this.failureEventResult}}
+                <div class="drep-log-note">
+                  <strong>Event Table:</strong> {{this.failureEventResult}}
+                </div>
+              {{/if}}
             {{/if}}
           </div>
         {{/each}}

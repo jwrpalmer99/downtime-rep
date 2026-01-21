@@ -1,4 +1,4 @@
-<form class="drep-settings" autocomplete="off">
+<div class="drep-settings" autocomplete="off">
   <div class="form-group">
     <label>Header Label</label>
     <input type="text" name="headerLabel" value="{{headerLabel}}" />
@@ -35,34 +35,27 @@
     <p class="notes">Only unlocked phases are selectable.</p>
   </div>
 
-  <div class="form-group">
-    <label class="checkbox">
-      <input type="checkbox" name="criticalBonusEnabled" {{#if criticalBonusEnabled}}checked{{/if}} />
-      Allow critical success bonus in Phase 1
-    </label>
-  </div>
-
-  <details class="drep-panel drep-collapsible">
-    <summary>Skill Alias Mapping (JSON)</summary>
+  <fieldset class="drep-panel">
+    <legend>Configuration</legend>
     <div class="form-group">
-      <label>Skill Aliases</label>
-      <textarea name="skillAliasJson" rows="8" class="drep-json">{{skillAliasJson}}</textarea>
-      <p class="notes">
-        Optional map of custom skill IDs to actual system skill keys (e.g. "persuasion": "per").
-      </p>
+      <button type="button" class="dialog-button" data-drep-action="open-skill-aliases">
+        Edit Skill Aliases
+      </button>
+      <p class="notes">Map custom skill IDs to system skills.</p>
     </div>
-  </details>
-
-  <details class="drep-panel drep-collapsible" open>
-    <summary>Phase Configuration (JSON)</summary>
     <div class="form-group">
-      <label>Phase Configuration</label>
-      <textarea name="phaseConfigJson" rows="18" class="drep-json">{{phaseConfigJson}}</textarea>
-      <p class="notes">
-        Edit phase names, targets, skills, DCs, and narratives using JSON. Save to apply.
-      </p>
+      <button type="button" class="dialog-button" data-drep-action="open-phase-config">
+        Edit Phase Configuration
+      </button>
+      <p class="notes">Edit phase details, skills, DCs, and narratives.</p>
     </div>
-  </details>
+    <div class="form-group">
+      <button type="button" class="dialog-button" data-drep-action="open-progress-state">
+        Edit Progress State
+      </button>
+      <p class="notes">Adjust phase progress, failures, and check count.</p>
+    </div>
+  </fieldset>
 
   <details class="drep-panel drep-collapsible">
     <summary>Phase Images</summary>
@@ -78,43 +71,6 @@
       </div>
     {{/each}}
     <p class="notes">Images appear in the header of the downtime tracker.</p>
-  </details>
-
-  <details class="drep-panel drep-collapsible">
-    <summary>Progress State</summary>
-    <div class="form-group">
-      <label>Check Count</label>
-      <input type="number" name="checkCount" value="{{state.checkCount}}" min="0" />
-    </div>
-    {{#each phaseStateRows}}
-      <div class="form-group">
-        <strong>{{this.name}}</strong>
-        {{#if this.isPhase1}}
-          <div class="drep-state-grid">
-            {{#each this.skillRows}}
-              <label>
-                {{this.label}} Progress
-                <input type="number" name="phase1Skill_{{this.key}}" value="{{this.value}}" min="0" />
-              </label>
-            {{/each}}
-          </div>
-        {{else}}
-          <label>
-            Progress (Target {{this.target}})
-            <input type="number" name="{{this.id}}Progress" value="{{this.progress}}" min="0" />
-          </label>
-        {{/if}}
-        <label>
-          Failures in Row
-          <input type="number" name="{{this.id}}FailuresInRow" value="{{this.failuresInRow}}" min="0" />
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" name="{{this.id}}Completed" {{#if this.completed}}checked{{/if}} />
-          Mark Complete
-        </label>
-      </div>
-    {{/each}}
-    <p class="notes">Progress edits apply when you click Save Settings.</p>
   </details>
 
   <details class="drep-panel drep-collapsible">
@@ -194,4 +150,4 @@
       Save Settings
     </button>
   </footer>
-</form>
+</div>
