@@ -19,13 +19,16 @@ Extensive customization and management via module settings.
 - Phase images with file picker support.
 - GM-only settings dialogs (ApplicationV2) with export/import for settings and state.
 - Works on default DnD5e sheet and Tidy5e sheet.
-
+  
 ### Use
 1. Enable the module.
-2. Configure phases in `Game Settings` -> `Module Settings` -> `Downtime Reputation Settings` (GM only).
+2. Configure phases in `Game Settings` -> `Module Settings` -> `Downtime Reputation Settings`.
 3. Use the configuration buttons to edit phase config, skill aliases, and progress state.
 4. Use the export/import menus in module settings for backups or transfers.
-5. Open any character sheet and use the `Downtime` tab to roll checks and track progress.
+5. Open any character sheet and use the added tab to roll checks and track progress.
+   
+   NB: there are default settings which set up an example of a 3 phased downtime (with the 1st phase having the most complete setup).
+       Until I can write better documentation please use the default configuration as an example.
 
 ### Settings Dialogs
 - Skill Aliases: map custom skill IDs to system skills.
